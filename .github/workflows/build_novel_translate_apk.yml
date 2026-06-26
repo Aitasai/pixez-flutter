@@ -90,7 +90,7 @@ jobs:
           storePassword=android
           keyPassword=android
           keyAlias=androiddebugkey
-          storeFile=app/debug.keystore
+          storeFile=debug.keystore
           EOF
           echo "--- key.properties ---"; cat key.properties
           ls -lh app/debug.keystore
