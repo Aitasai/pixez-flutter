@@ -1,0 +1,80 @@
+name: Build Novel Translate APK
+
+# 在 fork 仓库里手动触发：Actions 选项卡 → Build Novel Translate APK → Run workflow
+# 也可在 push master 时自动跑
+on:
+  workflow_dispatch:
+  push:
+    branches: [master, main]
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # cargokit / rhttp 在仓库内（非 submodule），但稳妥起见保留递归
+          submodules: recursive
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Flutter (stable)
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      # rhttp 通过 cargokit 在 gradle 阶段交叉编译 Rust 代码到 .so，
+      # 需要真实的 Rust 工具链 + android targets。
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: >-
+            aarch64-linux-android,
+            armv7-linux-androideabi,
+            i686-linux-androideabi,
+            x86_64-linux-android
+
+      - name: Configure Android SDK & NDK (for cargokit)
+        run: |
+          set -e
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$SDKMANAGER" --licenses > /dev/null 2>&1 || true
+          # 装一个固定版本 NDK，并暴露给 cargokit/gradle
+          "$SDKMANAGER" "ndk;27.0.12077973" > /dev/null 2>&1 || true
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.0.12077973" >> $GITHUB_ENV
+          echo "ANDROID_NDK_ROOT=$ANDROID_HOME/ndk/27.0.12077973" >> $GITHUB_ENV
+
+      - name: Flutter version check
+        run: flutter --version
+
+      - name: Fetch dart/flutter dependencies
+        run: flutter pub get
+
+      # 改动了 novel_store.dart（新增 mobx @observable/@action），必须重新 codegen
+      - name: Run codegen (mobx / json / riverpod / freezed)
+        run: dart run build_runner build --delete-conflicting-outputs
+
+      - name: Build release APK
+        run: |
+          flutter build apk --release \
+            --target-platform android-arm64,android-arm,android-x64
+
+      - name: Show APK info & sha256
+        run: |
+          ls -lh build/app/outputs/flutter-apk/app-release.apk
+          sha256sum build/app/outputs/flutter-apk/app-release.apk
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pixez-novel-translate-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
+          retention-days: 30

@@ -43,6 +43,9 @@ import 'package:pixez/page/novel/viewer/image_text.dart';
 import 'package:pixez/page/novel/viewer/novel_store.dart';
 import 'package:pixez/saf_plugin.dart';
 import 'package:pixez/supportor_plugin.dart';
+import 'package:pixez/translate/readable_text.dart'; // [PIXEZ-TRANSLATE-PATCH] ADD
+import 'package:pixez/translate/translate_service.dart'; // [PIXEZ-TRANSLATE-PATCH] ADD
+import 'package:pixez/translate/translate_setting_page.dart'; // [PIXEZ-TRANSLATE-PATCH] ADD
 import 'package:share_plus/share_plus.dart';
 import 'package:path/path.dart' as Path;
 
@@ -65,6 +68,7 @@ class _NovelViewerPageState extends State<NovelViewerPage> {
   bool supportTranslate = false;
   String _selectedText = "";
   NovelSpansGenerator novelSpansGenerator = NovelSpansGenerator();
+  bool showTranslation = false; // [PIXEZ-TRANSLATE-PATCH] ADD
 
   Future<void> initMethod() async {
     if (!Platform.isAndroid) return;
@@ -179,21 +183,26 @@ class _NovelViewerPageState extends State<NovelViewerPage> {
   }
 
   Widget _buildBody(BuildContext context) {
+    // [PIXEZ-TRANSLATE-PATCH] 译文/原文 spans 切换
+    final bodySpans =
+        showTranslation && _novelStore.translatedSpans.isNotEmpty
+            ? _novelStore.translatedSpans
+            : _novelStore.spans;
     return ListView.builder(
       padding: EdgeInsets.all(0),
       controller: _controller,
       itemBuilder: (context, index) {
         if (index == 0) {
           return _buildHeader(context);
-        } else if (index == _novelStore.spans.length + 1) {
+        } else if (index == bodySpans.length + 1) {
           return _buildCommentButton(context);
-        } else if (index == _novelStore.spans.length + 2) {
+        } else if (index == bodySpans.length + 2) {
           return Container(height: 10 + MediaQuery.of(context).padding.bottom);
         } else {
-          return _buildSpanText(context, index - 1, _novelStore.spans);
+          return _buildSpanText(context, index - 1, bodySpans);
         }
       },
-      itemCount: 3 + _novelStore.spans.length,
+      itemCount: 3 + bodySpans.length,
     );
   }
 
@@ -293,6 +302,16 @@ class _NovelViewerPageState extends State<NovelViewerPage> {
   }
 
   Widget _buildHeader(BuildContext context) {
+    // [PIXEZ-TRANSLATE-PATCH] 译过的标题/简介直接取译文
+    final bool titleTrans = showTranslation &&
+        (_novelStore.translatedTitle?.isNotEmpty ?? false);
+    final bool capTrans = showTranslation &&
+        (_novelStore.translatedCaption?.isNotEmpty ?? false);
+    final String titleText =
+        titleTrans ? _novelStore.translatedTitle! : "${_novelStore.novel!.title}";
+    final String captionText = capTrans
+        ? _novelStore.translatedCaption!
+        : (_novelStore.novel?.caption ?? "");
     return Padding(
       padding: EdgeInsets.only(top: MediaQuery.of(context).padding.top),
       child: Column(
@@ -312,7 +331,7 @@ class _NovelViewerPageState extends State<NovelViewerPage> {
               bottom: 8.0,
             ),
             child: Text(
-              "${_novelStore.novel!.title}",
+              titleText,
               style: Theme.of(context).textTheme.titleMedium,
             ),
           ),
@@ -379,7 +398,7 @@ class _NovelViewerPageState extends State<NovelViewerPage> {
                   contextMenuBuilder: (context, editableTextState) {
                     return _buildSelectionMenu(editableTextState, context);
                   },
-                  child: SelectableHtml(data: _novelStore.novel?.caption ?? ""),
+                  child: SelectableHtml(data: captionText),
                 ),
               ),
               shape: RoundedRectangleBorder(
@@ -593,6 +612,43 @@ class _NovelViewerPageState extends State<NovelViewerPage> {
     );
   }
 
+  // [PIXEZ-TRANSLATE-PATCH] ADD BEGIN：触发翻译 / 切换显示
+  Future<void> _translateNovel(BuildContext context) async {
+    Navigator.of(context).pop(); // 关掉 _showMessage 菜单
+    if (_novelStore.translating) {
+      BotToast.showText(text: "正在翻译中，请稍候");
+      return;
+    }
+    final cfg = await TranslateConfig.load();
+    if (cfg.provider == TranslateProvider.none) {
+      BotToast.showText(text: "请先在『翻译设置』里配置翻译服务");
+      if (!mounted) return;
+      Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => const TranslateSettingPage()),
+      );
+      return;
+    }
+    BotToast.showText(text: "开始翻译…");
+    final ok = await _novelStore.doTranslate();
+    if (!mounted) return;
+    if (!ok || _novelStore.translateError != null) {
+      BotToast.showText(text: "翻译失败：${_novelStore.translateError ?? '未知错误'}");
+      return;
+    }
+    setState(() => showTranslation = true);
+    BotToast.showText(text: "翻译完成，已切换为译文");
+  }
+
+  void _toggleTranslation(BuildContext context) {
+    Navigator.of(context).pop();
+    if (_novelStore.translatedBody == null) {
+      BotToast.showText(text: "尚未翻译，请先『翻译本文』");
+      return;
+    }
+    setState(() => showTranslation = !showTranslation);
+  }
+  // [PIXEZ-TRANSLATE-PATCH] ADD END
+
   Future _showMessage(BuildContext context) {
     return showModalBottomSheet(
       context: context,
@@ -628,6 +684,32 @@ class _NovelViewerPageState extends State<NovelViewerPage> {
                   ),
                 ),
               ),
+              // [PIXEZ-TRANSLATE-PATCH] ADD BEGIN：翻译入口
+              Divider(),
+              ListTile(
+                title: const Text('翻译本文'),
+                leading: const Icon(Icons.translate),
+                onTap: () => _translateNovel(context),
+              ),
+              ListTile(
+                title: Text(showTranslation ? '显示原文' : '显示译文'),
+                leading: const Icon(Icons.swap_horiz),
+                onTap: () => _toggleTranslation(context),
+              ),
+              ListTile(
+                title: const Text('翻译设置'),
+                leading: const Icon(Icons.tune),
+                onTap: () {
+                  Navigator.of(context).pop();
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => const TranslateSettingPage(),
+                    ),
+                  );
+                },
+              ),
+              Divider(),
+              // [PIXEZ-TRANSLATE-PATCH] ADD END
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 16.0),
                 child: Text(I18n.of(context).pre),
@@ -693,8 +775,41 @@ class _NovelViewerPageState extends State<NovelViewerPage> {
     );
   }
 
+  // [PIXEZ-TRANSLATE-PATCH] ADD BEGIN：导出文本拼装
+  /// 导出时使用的文本：译则拼标题+简介+正文(可读),否则维持上游原行为(仅正文原文)。
+  String _buildExportText(bool useTrans) {
+    if (!useTrans) {
+      return _novelStore.novelTextResponse!.text;
+    }
+    final title = _novelStore.translatedTitle ?? _novelStore.novel!.title;
+    final cap = (_novelStore.translatedCaption ?? '').toString();
+    final body = toReadableText(
+      _novelStore.translatedBody ?? _novelStore.novelTextResponse!.text,
+    );
+    final buf = StringBuffer()..writeln(title);
+    if (cap.isNotEmpty) {
+      buf
+        ..writeln()
+        ..writeln('简介：')
+        ..writeln(cap);
+    }
+    buf
+      ..writeln()
+      ..writeln(body);
+    return buf.toString();
+  }
+  // [PIXEZ-TRANSLATE-PATCH] ADD END
+
   void _export() async {
     if (_novelStore.novelTextResponse == null) return;
+    // [PIXEZ-TRANSLATE-PATCH] 切到译文时用译文导出
+    final bool useTrans =
+        showTranslation && _novelStore.translatedBody != null;
+    final String titleForName = (useTrans
+            ? _novelStore.translatedTitle ?? _novelStore.novel!.title
+            : _novelStore.novel!.title)
+        .trim();
+    final String data = _buildExportText(useTrans);
     if (Platform.isAndroid) {
       // final path = await getExternalStorageDirectory();
       // if (path == null) return;
@@ -722,9 +837,8 @@ class _NovelViewerPageState extends State<NovelViewerPage> {
       // resultFile.writeAsStringSync(data);
       // File(fileInAllPath).writeAsStringSync(data);
       // BotToast.showText(text: "export ${filePath}");
-      final data = _novelStore.novelTextResponse!.text;
       final uri = await SAFPlugin.createFile(
-        "${_novelStore.novel!.title.trim().toLegal()}.txt",
+        "${titleForName.toLegal()}.txt",
         "application/txt",
       );
       await SAFPlugin.writeUri(uri!, utf8.encode(data));
@@ -743,7 +857,7 @@ class _NovelViewerPageState extends State<NovelViewerPage> {
       }
       final novelDirPath = Path.join(
         dirPath,
-        _novelStore.novel!.title.trim().toLegal(),
+        titleForName.toLegal(),
       );
       final novelDir = Directory(novelDirPath);
       if (!novelDir.existsSync()) {
@@ -751,11 +865,10 @@ class _NovelViewerPageState extends State<NovelViewerPage> {
       }
       final fileInAllPath = Path.join(
         allPath,
-        "${_novelStore.novel!.title.trim().toLegal()}.txt",
+        "${titleForName.toLegal()}.txt",
       );
       final filePath = Path.join(novelDirPath, "${_novelStore.novel!.id}.txt");
       final resultFile = File(filePath);
-      final data = _novelStore.novelTextResponse!.text;
       resultFile.writeAsStringSync(data);
       File(fileInAllPath).writeAsStringSync(data);
       LPrinter.d("path: $filePath");

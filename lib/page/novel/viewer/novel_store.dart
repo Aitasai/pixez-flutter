@@ -27,6 +27,7 @@ import 'package:pixez/models/novel_viewer_persist.dart';
 import 'package:pixez/models/novel_web_response.dart';
 import 'package:pixez/network/api_client.dart';
 import 'package:pixez/page/novel/viewer/image_text.dart';
+import 'package:pixez/translate/translate_service.dart'; // [PIXEZ-TRANSLATE-PATCH] ADD
 import 'package:flutter/widgets.dart';
 
 part 'novel_store.g.dart';
@@ -51,6 +52,56 @@ abstract class _NovelStoreBase with Store {
   double bookedOffset = 0.0;
   @observable
   List<NovelSpansData> spans = [];
+
+  // [PIXEZ-TRANSLATE-PATCH] ADD BEGIN —— 翻译状态
+  @observable
+  bool translating = false;
+  @observable
+  String? translatedTitle;
+  @observable
+  String? translatedCaption;
+  @observable
+  String? translatedBody;
+  @observable
+  List<NovelSpansData> translatedSpans = [];
+  @observable
+  String? translateError;
+
+  /// 触发整篇小说翻译（标题 / 简介 / 正文分别翻译）。
+  @action
+  Future<bool> doTranslate() async {
+    if (novelTextResponse == null || novel == null) return false;
+    final cfg = await TranslateConfig.load();
+    if (cfg.provider == TranslateProvider.none) {
+      translateError = '未配置翻译服务';
+      return false;
+    }
+    translating = true;
+    translateError = null;
+    try {
+      translatedTitle =
+          await TranslateService.translateLarge(cfg, novel!.title);
+      final cap = (novel!.caption ?? '').toString();
+      translatedCaption =
+          cap.isEmpty ? '' : await TranslateService.translateLarge(cfg, cap);
+      translatedBody =
+          await TranslateService.translateLarge(cfg, novelTextResponse!.text);
+      // 用译文重建一份 NovelWebResponse 再走原 spans 生成器：
+      // 标记在翻译前已占位化、译后还原，所以译文 spans 与原文结构一致，
+      // 图片 / 分页 / 章节标题等都仍然能正常渲染。
+      final translatedResp =
+          NovelWebResponse.fromJson(novelTextResponse!.toJson());
+      translatedResp.text = translatedBody!;
+      translatedSpans = await compute(buildSpans, translatedResp);
+      return true;
+    } catch (e) {
+      translateError = e.toString();
+      return false;
+    } finally {
+      translating = false;
+    }
+  }
+  // [PIXEZ-TRANSLATE-PATCH] ADD END
 
   NovelViewerPersistProvider _novelViewerPersistProvider =
       NovelViewerPersistProvider();
