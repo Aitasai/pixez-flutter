@@ -104,16 +104,15 @@ jobs:
       # 在只 v2/v3 时报 INSTALL_PARSE_FAILED / packageInfo is null。
       # 这里用 apksigner 把 v1+v2+v3 全套打上，保证任何 Android 版本都能装。
       - name: Sign APK with apksigner (v1 + v2 + v3)
-        env:
-          ANDROID_BUILD_TOOLS: ${{ env.ANDROID_HOME }}/build-tools
         run: |
           set -e
           APK=build/app/outputs/flutter-apk/app-release.apk
-          # 找最新一个 build-tools 版本目录
-          BT=$(ls -d "$ANDROID_BUILD_TOOLS"/*/ | sort -V | tail -1)
+          # build-tools 在 $ANDROID_HOME/build-tools/<version>/ 下
+          BT=$(ls -d "$ANDROID_HOME/build-tools"/*/ | sort -V | tail -1)
+          echo "build-tools dir: $BT"
           APKSIGNER="$BT/apksigner"
           ZIPALIGN="$BT/zipalign"
-          echo "using: $APKSIGNER"
+          ls -l "$APKSIGNER" "$ZIPALIGN"
           # 先 zipalign -p 4 字节对齐（未对齐 v1/v2 都可能装不上）
           "$ZIPALIGN" -p -f 4 "$APK" "$APK.aligned"
           mv "$APK.aligned" "$APK"
