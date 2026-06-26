@@ -56,6 +56,18 @@ jobs:
       - name: Fetch dart/flutter dependencies
         run: flutter pub get
 
+      # 上游 rhttp 子包没把 freezed/flutter_rust_bridge 生成产物 commit 进来
+      # （frb_generated.dart 里引用的 sealed class 子类全部 .freezed.dart 缺失），
+      # 必须对 rhttp 子包单独跑一次 build_runner 才能编译。主工程的
+      # build_runner 不会处理 path 依赖里的子包。
+      - name: Generate rhttp missing files (freezed / frb)
+        working-directory: plugins/rhttp/rhttp
+        run: |
+          flutter pub get
+          dart run build_runner build --delete-conflicting-outputs
+          echo "--- generated files now present? ---"
+          find lib -name "*.freezed.dart" -o -name "frb_generated.freezed.dart" | head
+
       # 改动了 novel_store.dart（新增 mobx @observable/@action），必须重新 codegen
       - name: Run codegen (mobx / json / riverpod / freezed)
         run: dart run build_runner build --delete-conflicting-outputs
