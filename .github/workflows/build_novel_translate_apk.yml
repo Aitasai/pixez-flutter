@@ -95,15 +95,55 @@ jobs:
           echo "--- key.properties ---"; cat key.properties
           ls -lh app/debug.keystore
 
-      - name: Build release APK
+      - name: Build release APK (unsigned)
         run: |
           flutter build apk --release \
             --target-platform android-arm64,android-arm,android-x64
+
+      # Gradle 默认使用 v2/v3 签名但跳过 v1（JAR 签名）——某些 Android 机型
+      # 在只 v2/v3 时报 INSTALL_PARSE_FAILED / packageInfo is null。
+      # 这里用 apksigner 把 v1+v2+v3 全套打上，保证任何 Android 版本都能装。
+      - name: Sign APK with apksigner (v1 + v2 + v3)
+        env:
+          ANDROID_BUILD_TOOLS: ${{ env.ANDROID_HOME }}/build-tools
+        run: |
+          set -e
+          APK=build/app/outputs/flutter-apk/app-release.apk
+          # 找最新一个 build-tools 版本目录
+          BT=$(ls -d "$ANDROID_BUILD_TOOLS"/*/ | sort -V | tail -1)
+          APKSIGNER="$BT/apksigner"
+          ZIPALIGN="$BT/zipalign"
+          echo "using: $APKSIGNER"
+          # 先 zipalign -p 4 字节对齐（未对齐 v1/v2 都可能装不上）
+          "$ZIPALIGN" -p -f 4 "$APK" "$APK.aligned"
+          mv "$APK.aligned" "$APK"
+          # 用刚才生成的 keystore 做全版本签名
+          "$APKSIGNER" sign \
+            --ks android/app/debug.keystore \
+            --ks-pass pass:android \
+            --ks-key-alias androiddebugkey \
+            --key-pass pass:android \
+            --v1-signing-enabled true \
+            --v2-signing-enabled true \
+            --v3-signing-enabled true \
+            --v4-signing-enabled false \
+            "$APK"
+          echo "--- verify ---"
+          "$APKSIGNER" verify --print-certs "$APK" 2>&1 | head -20
 
       - name: Show APK info & sha256
         run: |
           ls -lh build/app/outputs/flutter-apk/app-release.apk
           sha256sum build/app/outputs/flutter-apk/app-release.apk
+          # 列 META-INF 印证 v1 签名文件已存在
+          python3 -c "
+          import zipfile
+          z=zipfile.ZipFile('build/app/outputs/flutter-apk/app-release.apk')
+          sig=[n for n in z.namelist() if n.startswith('META-INF/') and (n.endswith('.RSA') or n.endswith('.SF') or n.endswith('.MF'))]
+          print('META-INF v1 signature files:', sig if sig else '【仍无 v1 签名】')
+          data=open('build/app/outputs/flutter-apk/app-release.apk','rb').read()
+          print('v2/v3 APK Sig Block 42 magic present:', data.rfind(b'APK Sig Block 42')!=-1)
+          "
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
