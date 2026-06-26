@@ -69,6 +69,7 @@ class _NovelViewerPageState extends State<NovelViewerPage> {
   String _selectedText = "";
   NovelSpansGenerator novelSpansGenerator = NovelSpansGenerator();
   bool showTranslation = false; // [PIXEZ-TRANSLATE-PATCH] ADD
+  BuildContext? _pageContext; // [PIXEZ-TRANSLATE-PATCH] 存页面 context 供异步使用
 
   Future<void> initMethod() async {
     if (!Platform.isAndroid) return;
@@ -111,6 +112,7 @@ class _NovelViewerPageState extends State<NovelViewerPage> {
   Widget build(BuildContext context) {
     return Observer(
       builder: (context) {
+        _pageContext = context; // [PIXEZ-TRANSLATE-PATCH]
         _textStyle = Theme.of(
           context,
         ).textTheme.bodyLarge!.copyWith(fontSize: userSetting.novelFontsize);
@@ -218,11 +220,31 @@ class _NovelViewerPageState extends State<NovelViewerPage> {
           Navigator.of(context).pop();
         },
       ),
-      title: Text(
-        _novelStore.novelTextResponse!.text.length.toString(),
-        style: Theme.of(context).textTheme.bodyLarge,
-      ),
-      backgroundColor: Colors.transparent,
+// [PIXEZ-TRANSLATE-PATCH] 翻译中显示进度
+          if (_novelStore.translating)
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                SizedBox(
+                  width: 16, height: 16,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: Theme.of(context).colorScheme.primary,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  '翻译中 ${_novelStore.translatedParagraphCount}/${_novelStore.totalNormalParagraphs}',
+                  style: Theme.of(context).textTheme.bodyLarge,
+                ),
+              ],
+            )
+          else
+            Text(
+              _novelStore.novelTextResponse!.text.length.toString(),
+              style: Theme.of(context).textTheme.bodyLarge,
+            ),
+          backgroundColor: Colors.transparent,
       actions: <Widget>[
         NovelBookmarkButton(novel: _novelStore.novel!),
         IconButton(
@@ -259,25 +281,87 @@ class _NovelViewerPageState extends State<NovelViewerPage> {
     int index,
     List<NovelSpansData> spanDatas,
   ) {
+    final spanData = spanDatas[index];
+    final bool isNormal = spanData.type == 'normal';
+    // 翻译状态（仅 normal 段落才有意义）
+    final bool isTranslating =
+        isNormal && _novelStore.translatingParagraphIndex == index;
+    final String? err =
+        isNormal ? _novelStore.errorForIdx(index) : null;
+    final bool hasTrans =
+        isNormal && _novelStore.translatedTextForIdx(index) != null;
+
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16.0),
-      child: SelectionArea(
-        onSelectionChanged: (value) {
-          _selectedText = value?.plainText ?? "";
-        },
-        contextMenuBuilder: (context, editableTextState) {
-          return _buildSelectionMenu(editableTextState, context);
-        },
-        child: Text.rich(
-          novelSpansGenerator.novelSpansDatatoInlineSpan(
-            context,
-            spanDatas[index],
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // —— 原文 / 译文行 ——
+          SelectionArea(
+            onSelectionChanged: (value) {
+              _selectedText = value?.plainText ?? "";
+            },
+            contextMenuBuilder: (context, editableTextState) {
+              return _buildSelectionMenu(editableTextState, context);
+            },
+            child: Text.rich(
+              novelSpansGenerator.novelSpansDatatoInlineSpan(
+                context,
+                spanData,
+              ),
+              style: _textStyle,
+              textHeightBehavior: const TextHeightBehavior(
+                applyHeightToLastDescent: true,
+              ),
+            ),
           ),
-          style: _textStyle,
-          textHeightBehavior: TextHeightBehavior(
-            applyHeightToLastDescent: true,
-          ),
-        ),
+          // —— 逐段翻译进度 / 错误 / 完成标记 ——
+          if (!showTranslation) ...[
+            if (isTranslating)
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Row(children: [
+                  SizedBox(
+                    width: 12, height: 12,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: Theme.of(context).colorScheme.primary,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Text('翻译中…',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: Theme.of(context).colorScheme.outline,
+                    ),
+                  ),
+                ]),
+              ),
+            if (err != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Row(children: [
+                  Icon(Icons.error_outline, size: 14,
+                    color: Theme.of(context).colorScheme.error),
+                  const SizedBox(width: 4),
+                  Expanded(
+                    child: Text(err,
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: Theme.of(context).colorScheme.error,
+                      ),
+                    ),
+                  ),
+                ]),
+              ),
+            if (hasTrans && !isTranslating && err == null)
+              Padding(
+                padding: const EdgeInsets.only(top: 2),
+                child: Icon(Icons.check_circle_outline, size: 14,
+                  color: Theme.of(context).colorScheme.primary.withAlpha(140)),
+              ),
+          ],
+        ],
       ),
     );
   }
@@ -613,8 +697,7 @@ class _NovelViewerPageState extends State<NovelViewerPage> {
   }
 
   // [PIXEZ-TRANSLATE-PATCH] ADD BEGIN：触发翻译 / 切换显示
-  Future<void> _translateNovel(BuildContext context) async {
-    Navigator.of(context).pop(); // 关掉 _showMessage 菜单
+  Future<void> _translateNovel() async {
     if (_novelStore.translating) {
       BotToast.showText(text: "正在翻译中，请稍候");
       return;
@@ -623,7 +706,7 @@ class _NovelViewerPageState extends State<NovelViewerPage> {
     if (cfg.provider == TranslateProvider.none) {
       BotToast.showText(text: "请先在『翻译设置』里配置翻译服务");
       if (!mounted) return;
-      Navigator.of(context).push(
+      Navigator.of(_pageContext!).push(
         MaterialPageRoute(builder: (_) => const TranslateSettingPage()),
       );
       return;
@@ -632,16 +715,17 @@ class _NovelViewerPageState extends State<NovelViewerPage> {
     final ok = await _novelStore.doTranslate();
     if (!mounted) return;
     if (!ok || _novelStore.translateError != null) {
-      BotToast.showText(text: "翻译失败：${_novelStore.translateError ?? '未知错误'}");
+      final err = _novelStore.translateError;
+      BotToast.showText(text: "翻译失败：${err ?? '未知错误'}");
       return;
     }
     setState(() => showTranslation = true);
     BotToast.showText(text: "翻译完成，已切换为译文");
   }
 
-  void _toggleTranslation(BuildContext context) {
-    Navigator.of(context).pop();
-    if (_novelStore.translatedBody == null) {
+  void _toggleTranslation() {
+    if (_novelStore.translatedSpans.isEmpty &&
+        _novelStore.translatedParagraphCount == 0) {
       BotToast.showText(text: "尚未翻译，请先『翻译本文』");
       return;
     }
@@ -689,12 +773,18 @@ class _NovelViewerPageState extends State<NovelViewerPage> {
               ListTile(
                 title: const Text('翻译本文'),
                 leading: const Icon(Icons.translate),
-                onTap: () => _translateNovel(context),
+                onTap: () {
+                Navigator.of(context).pop();
+                _translateNovel();
+              },
               ),
               ListTile(
                 title: Text(showTranslation ? '显示原文' : '显示译文'),
                 leading: const Icon(Icons.swap_horiz),
-                onTap: () => _toggleTranslation(context),
+                onTap: () {
+                Navigator.of(context).pop();
+                _toggleTranslation();
+              },
               ),
               ListTile(
                 title: const Text('翻译设置'),
@@ -783,9 +873,14 @@ class _NovelViewerPageState extends State<NovelViewerPage> {
     }
     final title = _novelStore.translatedTitle ?? _novelStore.novel!.title;
     final cap = (_novelStore.translatedCaption ?? '').toString();
-    final body = toReadableText(
-      _novelStore.translatedBody ?? _novelStore.novelTextResponse!.text,
-    );
+    // 从逐段翻译结果重建译文正文
+    final String tBody;
+    if (_novelStore.translatedSpans.isNotEmpty) {
+      tBody = _novelStore.translatedSpans.map((s) => s.text).join();
+    } else {
+      tBody = _novelStore.novelTextResponse!.text;
+    }
+    final body = toReadableText(tBody);
     final buf = StringBuffer()..writeln(title);
     if (cap.isNotEmpty) {
       buf
@@ -804,7 +899,7 @@ class _NovelViewerPageState extends State<NovelViewerPage> {
     if (_novelStore.novelTextResponse == null) return;
     // [PIXEZ-TRANSLATE-PATCH] 切到译文时用译文导出
     final bool useTrans =
-        showTranslation && _novelStore.translatedBody != null;
+        showTranslation && _novelStore.translatedSpans.isNotEmpty;
     final String titleForName = (useTrans
             ? _novelStore.translatedTitle ?? _novelStore.novel!.title
             : _novelStore.novel!.title)

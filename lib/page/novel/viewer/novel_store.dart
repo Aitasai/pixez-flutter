@@ -53,7 +53,7 @@ abstract class _NovelStoreBase with Store {
   @observable
   List<NovelSpansData> spans = [];
 
-  // [PIXEZ-TRANSLATE-PATCH] ADD BEGIN —— 翻译状态
+  // [PIXEZ-TRANSLATE-PATCH] ADD BEGIN —— 翻译状态（逐段翻译）
   @observable
   bool translating = false;
   @observable
@@ -61,13 +61,32 @@ abstract class _NovelStoreBase with Store {
   @observable
   String? translatedCaption;
   @observable
-  String? translatedBody;
-  @observable
   List<NovelSpansData> translatedSpans = [];
   @observable
   String? translateError;
 
-  /// 触发整篇小说翻译（标题 / 简介 / 正文分别翻译）。
+  /// 已完成翻译的段数（type == 'normal'）
+  @observable
+  int translatedParagraphCount = 0;
+
+  /// 可翻译段落总数
+  @observable
+  int totalNormalParagraphs = 0;
+
+  /// 当前正在翻译的段索引（-1 表示空闲）
+  @observable
+  int translatingParagraphIndex = -1;
+
+  final Map<int, String> _paragraphTranslations = {};
+  final Map<int, String> _paragraphErrors = {};
+
+  /// 给定段索引是否有译文
+  String? translatedTextForIdx(int idx) => _paragraphTranslations[idx];
+
+  /// 给定段索引的错误
+  String? errorForIdx(int idx) => _paragraphErrors[idx];
+
+  /// 触发整篇小说翻译（标题/简介即时翻译，正文逐段翻译并报告进度）。
   @action
   Future<bool> doTranslate() async {
     if (novelTextResponse == null || novel == null) return false;
@@ -78,27 +97,64 @@ abstract class _NovelStoreBase with Store {
     }
     translating = true;
     translateError = null;
+    _paragraphTranslations.clear();
+    _paragraphErrors.clear();
+    translatedParagraphCount = 0;
+    translatedSpans = [];
+    totalNormalParagraphs = 0;
     try {
+      // 1. 标题 & 简介（即时，量小）
       translatedTitle =
           await TranslateService.translateLarge(cfg, novel!.title);
       final cap = (novel!.caption ?? '').toString();
       translatedCaption =
           cap.isEmpty ? '' : await TranslateService.translateLarge(cfg, cap);
-      translatedBody =
-          await TranslateService.translateLarge(cfg, novelTextResponse!.text);
-      // 用译文重建一份 NovelWebResponse 再走原 spans 生成器：
-      // 标记在翻译前已占位化、译后还原，所以译文 spans 与原文结构一致，
-      // 图片 / 分页 / 章节标题等都仍然能正常渲染。
+
+      // 2. 统计 normal 段落
+      final allSpans = spans;
+      final normalIdxList = <int>[];
+      for (int i = 0; i < allSpans.length; i++) {
+        if (allSpans[i].type == 'normal') {
+          normalIdxList.add(i);
+        }
+      }
+      totalNormalParagraphs = normalIdxList.length;
+
+      // 3. 逐段翻译
+      for (int i = 0; i < normalIdxList.length; i++) {
+        final idx = normalIdxList[i];
+        translatingParagraphIndex = idx;
+        try {
+          final text = allSpans[idx].text;
+          final translated =
+              await TranslateService.translateLarge(cfg, text);
+          _paragraphTranslations[idx] = translated;
+          translatedParagraphCount++;
+        } catch (e) {
+          _paragraphErrors[idx] = e.toString();
+        }
+      }
+
+      // 4. 用段落级译文重建全文 → 生成 translatedSpans
+      final buf = StringBuffer();
+      for (int i = 0; i < allSpans.length; i++) {
+        if (_paragraphTranslations.containsKey(i)) {
+          buf.write(_paragraphTranslations[i]);
+        } else {
+          buf.write(allSpans[i].text);
+        }
+      }
       final translatedResp =
           NovelWebResponse.fromJson(novelTextResponse!.toJson());
-      translatedResp.text = translatedBody!;
+      translatedResp.text = buf.toString();
       translatedSpans = await compute(buildSpans, translatedResp);
-      return true;
+      return translatedParagraphCount > 0;
     } catch (e) {
       translateError = e.toString();
       return false;
     } finally {
       translating = false;
+      translatingParagraphIndex = -1;
     }
   }
   // [PIXEZ-TRANSLATE-PATCH] ADD END

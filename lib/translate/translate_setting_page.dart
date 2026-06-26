@@ -56,7 +56,6 @@ class _TranslateSettingPageState extends State<TranslateSettingPage> {
 
   Future<void> _save() async {
     final cfg = _cfg!;
-    // 微软方案里 _model 字段复用为 region，普通 OpenAI 才有 model 概念。
     cfg.model = _modelCtrl.text.trim();
     cfg.model = (cfg.provider == TranslateProvider.microsoft && cfg.model.isEmpty)
         ? cfg.model
@@ -74,6 +73,61 @@ class _TranslateSettingPageState extends State<TranslateSettingPage> {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('已保存翻译配置')),
       );
+    }
+  }
+
+  bool _testing = false;
+
+  Future<void> _testTranslate() async {
+    await _save();
+    final cfg = _cfg!;
+    setState(() => _testing = true);
+    const testText = 'こんにちは、世界。これは翻訳テストです。';
+    try {
+      final result = await TranslateService.translateLarge(cfg, testText);
+      if (!mounted) return;
+      showDialog(
+        context: context,
+        builder: (_) => AlertDialog(
+          title: const Text('翻译测试成功'),
+          content: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text('原文：', style: TextStyle(fontWeight: FontWeight.bold)),
+                const SelectableText(testText),
+                const SizedBox(height: 12),
+                const Text('译文：', style: TextStyle(fontWeight: FontWeight.bold)),
+                SelectableText(result),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('确定'),
+            ),
+          ],
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      showDialog(
+        context: context,
+        builder: (_) => AlertDialog(
+          title: const Text('翻译测试失败'),
+          content: SelectableText(e.toString()),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('关闭'),
+            ),
+          ],
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _testing = false);
     }
   }
 
@@ -202,7 +256,7 @@ class _TranslateSettingPageState extends State<TranslateSettingPage> {
             ),
 
           const SizedBox(height: 24),
-          if (cfg.provider != TranslateProvider.none)
+          if (cfg.provider != TranslateProvider.none) ...[
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16),
               child: FilledButton.icon(
@@ -211,6 +265,19 @@ class _TranslateSettingPageState extends State<TranslateSettingPage> {
                 onPressed: _save,
               ),
             ),
+            const SizedBox(height: 12),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: OutlinedButton.icon(
+                icon: _testing
+                    ? const SizedBox(width: 18, height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2))
+                    : const Icon(Icons.science_outlined),
+                label: Text(_testing ? '测试中…' : '测试翻译'),
+                onPressed: _testing ? null : _testTranslate,
+              ),
+            ),
+          ],
           const SizedBox(height: 32),
         ],
       ),
