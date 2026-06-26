@@ -79,18 +79,21 @@ jobs:
           # 未签名 release APK 安装时报 "packageInfo is null" / 错误 33，
           # 这里生成一个临时 keystore 并写 key.properties 触发
           # build.gradle.kts 里的 release signingConfig 分支。
+          # 注意：build.gradle.kts 用 `file(it)` 解析 storeFile 路径，
+          # 是相对 android/app/ 的，所以 keystore 必须放在 android/app/ 下。
           keytool -genkey -v \
-            -keystore debug.keystore \
+            -keystore app/debug.keystore \
             -storepass android -keypass android \
             -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 \
             -dname "CN=PixEz Translate, OU=CI, O=local, L=local, S=local, C=CN"
-          cat > key.properties <<EOF
+          cat > key.properties <<'EOF'
           storePassword=android
           keyPassword=android
           keyAlias=androiddebugkey
-          storeFile=debug.keystore
+          storeFile=app/debug.keystore
           EOF
           echo "--- key.properties ---"; cat key.properties
+          ls -lh app/debug.keystore
 
       - name: Build release APK
         run: |
