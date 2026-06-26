@@ -221,8 +221,8 @@ class _NovelViewerPageState extends State<NovelViewerPage> {
         },
       ),
 // [PIXEZ-TRANSLATE-PATCH] 翻译中显示进度
-          if (_novelStore.translating)
-            Row(
+      title: _novelStore.translating
+          ? Row(
               mainAxisSize: MainAxisSize.min,
               children: [
                 SizedBox(
@@ -239,12 +239,11 @@ class _NovelViewerPageState extends State<NovelViewerPage> {
                 ),
               ],
             )
-          else
-            Text(
+          : Text(
               _novelStore.novelTextResponse!.text.length.toString(),
               style: Theme.of(context).textTheme.bodyLarge,
             ),
-          backgroundColor: Colors.transparent,
+      backgroundColor: Colors.transparent,
       actions: <Widget>[
         NovelBookmarkButton(novel: _novelStore.novel!),
         IconButton(
