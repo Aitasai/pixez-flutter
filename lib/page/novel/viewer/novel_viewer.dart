@@ -723,8 +723,7 @@ class _NovelViewerPageState extends State<NovelViewerPage> {
   }
 
   void _toggleTranslation() {
-    if (_novelStore.translatedSpans.isEmpty &&
-        _novelStore.translatedParagraphCount == 0) {
+    if (_novelStore.translatedSpans.isEmpty) {
       BotToast.showText(text: "尚未翻译，请先『翻译本文』");
       return;
     }

@@ -86,75 +86,103 @@ abstract class _NovelStoreBase with Store {
   /// 给定段索引的错误
   String? errorForIdx(int idx) => _paragraphErrors[idx];
 
-  /// 触发整篇小说翻译（标题/简介即时翻译，正文逐段翻译并报告进度）。
-  @action
+  /// 按双换行 \\n\\n 拆分文本成子段（一万字小说也不该只有 5 段）。
+  static List<String> _splitSpanText(String text) {
+    return text
+        .split(RegExp(r'\n{2,}'))
+        .map((s) => s.trim())
+        .where((s) => s.isNotEmpty)
+        .toList();
+  }
+
+  /// 触发整篇小说翻译。
+  /// 标题/简介即时翻译，正文按 \\n\\n 拆成自然段落，
+  /// 3 路并行翻译，每完成一段立即刷新 UI（runInAction），
+  /// 所有段完成后拼接 full body → 重建 translatedSpans。
   Future<bool> doTranslate() async {
     if (novelTextResponse == null || novel == null) return false;
     final cfg = await TranslateConfig.load();
     if (cfg.provider == TranslateProvider.none) {
-      translateError = '未配置翻译服务';
+      runInAction(() => translateError = '未配置翻译服务');
       return false;
     }
-    translating = true;
-    translateError = null;
-    _paragraphTranslations.clear();
-    _paragraphErrors.clear();
-    translatedParagraphCount = 0;
-    translatedSpans = [];
-    totalNormalParagraphs = 0;
+    runInAction(() {
+      translating = true;
+      translateError = null;
+      _paragraphTranslations.clear();
+      _paragraphErrors.clear();
+      translatedParagraphCount = 0;
+      translatedSpans = [];
+      totalNormalParagraphs = 0;
+    });
     try {
-      // 1. 标题 & 简介（即时，量小）
+      // 1. 标题 & 简介
       translatedTitle =
           await TranslateService.translateLarge(cfg, novel!.title);
       final cap = (novel!.caption ?? '').toString();
       translatedCaption =
           cap.isEmpty ? '' : await TranslateService.translateLarge(cfg, cap);
 
-      // 2. 统计 normal 段落
+      // 2. 按 \\n\\n 拆自然段: List<(spanIdx, subText)>
       final allSpans = spans;
-      final normalIdxList = <int>[];
+      final subParas = <(int, String)>[];
       for (int i = 0; i < allSpans.length; i++) {
         if (allSpans[i].type == NovelSpansType.normal) {
-          normalIdxList.add(i);
+          for (final p in _splitSpanText(allSpans[i].text)) {
+            subParas.add((i, p));
+          }
         }
       }
-      totalNormalParagraphs = normalIdxList.length;
+      runInAction(() => totalNormalParagraphs = subParas.length);
 
-      // 3. 逐段翻译
-      for (int i = 0; i < normalIdxList.length; i++) {
-        final idx = normalIdxList[i];
-        translatingParagraphIndex = idx;
-        try {
-          final text = allSpans[idx].text;
-          final translated =
-              await TranslateService.translateLarge(cfg, text);
-          _paragraphTranslations[idx] = translated;
-          translatedParagraphCount++;
-        } catch (e) {
-          _paragraphErrors[idx] = e.toString();
-        }
+      // 3. 并行 3 路翻译子段
+      for (int i = 0; i < subParas.length; i += 3) {
+        final end = (i + 3).clamp(0, subParas.length);
+        final batch = subParas.sublist(i, end);
+        await Future.wait(
+          batch.map((s) => _translateSub(s.$1, s.$2, cfg)),
+        );
       }
 
-      // 4. 用段落级译文重建全文 → 生成 translatedSpans
+      // 4. 拼接 full body → 生成 translatedSpans
       final buf = StringBuffer();
       for (int i = 0; i < allSpans.length; i++) {
-        if (_paragraphTranslations.containsKey(i)) {
-          buf.write(_paragraphTranslations[i]);
-        } else {
-          buf.write(allSpans[i].text);
-        }
+        buf.write(_paragraphTranslations[i] ?? allSpans[i].text);
       }
       final translatedResp =
           NovelWebResponse.fromJson(novelTextResponse!.toJson());
       translatedResp.text = buf.toString();
       translatedSpans = await compute(buildSpans, translatedResp);
+      runInAction(() => translating = false);
       return translatedParagraphCount > 0;
     } catch (e) {
-      translateError = e.toString();
+      runInAction(() {
+        translateError = e.toString();
+        translating = false;
+      });
       return false;
-    } finally {
-      translating = false;
-      translatingParagraphIndex = -1;
+    }
+  }
+
+  /// 翻译一个子段，完成后用 runInAction 立即更新 UI。
+  Future<void> _translateSub(int spanIdx, String subText, TranslateConfig cfg) async {
+    runInAction(() => translatingParagraphIndex = spanIdx);
+    try {
+      final translated = await TranslateService.translateLarge(cfg, subText);
+      runInAction(() {
+        final prev = _paragraphTranslations[spanIdx] ?? '';
+        _paragraphTranslations[spanIdx] =
+            prev.isEmpty ? translated : '$prev\n\n$translated';
+        translatedParagraphCount++;
+        translatingParagraphIndex = -1;
+      });
+    } catch (e) {
+      runInAction(() {
+        _paragraphErrors[spanIdx] =
+            (_paragraphErrors[spanIdx] ?? '') + '${e.toString()}\n';
+        translatedParagraphCount++;
+        translatingParagraphIndex = -1;
+      });
     }
   }
   // [PIXEZ-TRANSLATE-PATCH] ADD END
