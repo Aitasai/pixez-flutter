@@ -114,7 +114,7 @@ abstract class _NovelStoreBase with Store {
       final allSpans = spans;
       final normalIdxList = <int>[];
       for (int i = 0; i < allSpans.length; i++) {
-        if (allSpans[i].type == 'normal') {
+        if (allSpans[i].type == NovelSpansType.normal) {
           normalIdxList.add(i);
         }
       }

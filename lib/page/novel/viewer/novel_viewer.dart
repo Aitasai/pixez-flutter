@@ -281,7 +281,7 @@ class _NovelViewerPageState extends State<NovelViewerPage> {
     List<NovelSpansData> spanDatas,
   ) {
     final spanData = spanDatas[index];
-    final bool isNormal = spanData.type == 'normal';
+    final bool isNormal = spanData.type == NovelSpansType.normal;
     // 翻译状态（仅 normal 段落才有意义）
     final bool isTranslating =
         isNormal && _novelStore.translatingParagraphIndex == index;
