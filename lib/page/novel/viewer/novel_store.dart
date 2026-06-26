@@ -144,15 +144,19 @@ abstract class _NovelStoreBase with Store {
         );
       }
 
-      // 4. 拼接 full body → 生成 translatedSpans
+      // 4. 拼接 full body → 临时借原对象改 text → buildSpans → 还原
       final buf = StringBuffer();
       for (int i = 0; i < allSpans.length; i++) {
         buf.write(_paragraphTranslations[i] ?? allSpans[i].text);
       }
-      final translatedResp =
-          NovelWebResponse.fromJson(novelTextResponse!.toJson());
-      translatedResp.text = buf.toString();
-      translatedSpans = await compute(buildSpans, translatedResp);
+      final origText = novelTextResponse!.text;
+      novelTextResponse!.text = buf.toString();
+      try {
+        translatedSpans =
+            await compute(buildSpans, novelTextResponse!);
+      } finally {
+        novelTextResponse!.text = origText;
+      }
       runInAction(() => translating = false);
       return translatedParagraphCount > 0;
     } catch (e) {
