@@ -129,28 +129,36 @@ abstract class _NovelStoreBase with Store {
         }
       }
 
-      // 3. 按 \n\n 拆自然段，按 glossaryBatchSize 合并为批次
-      final paras = _splitParagraphs(novelTextResponse!.text);
-      final batchSize = cfg.glossaryBatchSize.clamp(1, 20);
-      final batches = <(int, List<String>)>[];
-      for (int i = 0; i < paras.length; i += batchSize) {
-        final end = (i + batchSize).clamp(0, paras.length);
-        batches.add((i, paras.sublist(i, end)));
-      }
-      final totalBatches = batches.length;
-      runInAction(() => totalNormalParagraphs = totalBatches);
+      // 3. 流式翻译正文（一次 API 请求，逐段接收显示）
+      final totalParas = _splitParagraphs(novelTextResponse!.text).length;
+      runInAction(() => totalNormalParagraphs = totalParas);
+      final translatedText = await TranslateService.translateStreaming(
+        cfg, novelTextResponse!.text,
+        onParagraph: (idx, text) {
+          runInAction(() {
+            _paragraphTranslations[idx] = text;
+            translatedParagraphCount = idx + 1;
+          });
+          _rebuildTranslatedSpans();
+          onProgress?.call();
+        },
+        onProgress: (done, total) {
+          runInAction(() {
+            translatedParagraphCount = done;
+            totalNormalParagraphs = total;
+          });
+          onProgress?.call();
+        },
+      );
 
-      // 4. 并发翻译批次
-      final concurrency = cfg.maxConcurrency.clamp(1, 10);
-      for (int i = 0; i < batches.length; i += concurrency) {
-        final end = (i + concurrency).clamp(0, batches.length);
-        final group = batches.sublist(i, end);
-        await Future.wait(
-          group.map((b) => _translateBatch(b.$1, b.$2, cfg)),
-        );
-        await _rebuildTranslatedSpans();
-        onProgress?.call();
-        await Future.delayed(const Duration(milliseconds: 30));
+      // 4. 最终构建 translatedSpans
+      final origText = novelTextResponse!.text;
+      novelTextResponse!.text = translatedText;
+      try {
+        translatedSpans =
+            await compute(buildSpans, novelTextResponse!);
+      } finally {
+        novelTextResponse!.text = origText;
       }
       runInAction(() => translating = false);
       return translatedParagraphCount > 0;
@@ -160,41 +168,6 @@ abstract class _NovelStoreBase with Store {
         translating = false;
       });
       return false;
-    }
-  }
-
-  /// 翻译一个批次（N 个自然段合并为一次 API 调用，[SEG N] 标记切分）。
-  Future<void> _translateBatch(int baseIdx, List<String> texts,
-      TranslateConfig cfg) async {
-    runInAction(() => translatingParagraphIndex = baseIdx);
-    try {
-      final buf = StringBuffer();
-      for (int i = 0; i < texts.length; i++) {
-        if (i > 0) buf.write('\n\n');
-        buf.write('[SEG${baseIdx + i + 1}]\n${texts[i]}');
-      }
-      final combined = buf.toString();
-      final translated = await TranslateService.translateLarge(cfg, combined);
-      final parts = translated
-          .split(RegExp(r'\[SEG\d+\]'))
-          .map((s) => s.trim())
-          .where((s) => s.isNotEmpty)
-          .toList();
-      runInAction(() {
-        for (int i = 0; i < texts.length && i < parts.length; i++) {
-          _paragraphTranslations[baseIdx + i] = parts[i];
-          translatedParagraphCount += texts.length;
-        }
-        translatingParagraphIndex = -1;
-      });
-    } catch (e) {
-      runInAction(() {
-        for (int i = 0; i < texts.length; i++) {
-          _paragraphErrors[baseIdx + i] = e.toString();
-        }
-        translatedParagraphCount += texts.length;
-        translatingParagraphIndex = -1;
-      });
     }
   }
 

@@ -169,6 +169,91 @@ class TranslateService {
     }
   }
 
+  /// 流式翻译：一次 API 请求，解析 SSE 流，每当 [SEG N] 段落完整时回调。
+  /// 返回完整译文。仅 OpenAI 兼容 API 支持。
+  static Future<String> translateStreaming(
+    TranslateConfig cfg,
+    String bodyText, {
+    void Function(int paraIdx, String translated)? onParagraph,
+    void Function(int done, int total)? onProgress,
+  }) async {
+    if (cfg.provider != TranslateProvider.openai) {
+      return translateLarge(cfg, bodyText);
+    }
+    // 1. 按 \\n\\n 拆段并标注 [SEG N]
+    final rawParas = bodyText
+        .split(RegExp(r'\n{2,}'))
+        .map((s) => s.trim())
+        .where((s) => s.isNotEmpty)
+        .toList();
+    final marked = <String>[];
+    final markerMap = <String>[];  // for restore later
+    for (int i = 0; i < rawParas.length; i++) {
+      final local = <String>[];
+      final ph = _placeholderMarkers(rawParas[i], local);
+      markerMap.addAll(local);
+      marked.add('[SEG${i + 1}]\n$ph');
+    }
+    final combined = marked.join('\n\n');
+
+    // 2. 发流式请求
+    final url = cfg.apiUrl.isEmpty ? cfg.defaultApiUrl : cfg.apiUrl;
+    final dio = Dio();
+    final resp = await dio.post<dynamic>(
+      url,
+      data: jsonEncode({
+        'model': cfg.model,
+        'temperature': 0.3,
+        'stream': true,
+        'messages': [
+          {'role': 'system', 'content': cfg.systemPrompt},
+          {'role': 'user', 'content': combined},
+        ],
+      }),
+      options: Options(
+        contentType: Headers.jsonContentType,
+        headers: {'Authorization': 'Bearer ${cfg.apiKey}'},
+        responseType: ResponseType.stream,
+      ),
+    );
+
+    // 3. 解析 SSE 流
+    final stream = resp.data.stream as Stream<List<int>>;
+    final acc = StringBuffer();
+    var lineBuf = '';
+    var lastDone = 0;
+    final total = rawParas.length;
+
+    await for (final chunk in stream) {
+      lineBuf += utf8.decode(chunk, allowMalformed: true);
+      while (lineBuf.contains('\n')) {
+        final nl = lineBuf.indexOf('\n');
+        final line = lineBuf.substring(0, nl).trim();
+        lineBuf = lineBuf.substring(nl + 1);
+        if (line.startsWith('data: ') && line != 'data: [DONE]') {
+          try {
+            final data = jsonDecode(line.substring(6));
+            final delta = data['choices']?[0]?['delta']?['content'];
+            if (delta != null && delta is String) acc.write(delta);
+          } catch (_) {}
+        }
+      }
+      // 检查是否有新段落完整
+      final full = _restoreMarkers(acc.toString(), markerMap);
+      final segs = full.split(RegExp(r'\[SEG\d+\]'));
+      final doneNow = segs.length - 1; // segs[0] is empty before first marker
+      if (doneNow > lastDone) {
+        for (int i = lastDone; i < doneNow && i < total; i++) {
+          final t = segs.length > i + 1 ? segs[i + 1].trim() : '';
+          if (t.isNotEmpty) onParagraph?.call(i, t);
+        }
+        lastDone = doneNow;
+        onProgress?.call(doneNow.clamp(0, total), total);
+      }
+    }
+    return _restoreMarkers(acc.toString(), markerMap);
+  }
+
   /// 翻译任意长文本：占位化 → 分块 → 逐块翻译 → 还原标记。
   static Future<String> translateLarge(
     TranslateConfig cfg,
