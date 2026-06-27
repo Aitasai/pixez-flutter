@@ -711,7 +711,11 @@ class _NovelViewerPageState extends State<NovelViewerPage> {
       return;
     }
     BotToast.showText(text: "开始翻译…");
-    final ok = await _novelStore.doTranslate();
+    final ok = await _novelStore.doTranslate(
+      onProgress: () {
+        if (mounted) setState(() {});
+      },
+    );
     if (!mounted) return;
     if (!ok || _novelStore.translateError != null) {
       final err = _novelStore.translateError;

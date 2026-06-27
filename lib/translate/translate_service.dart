@@ -22,11 +22,14 @@ enum TranslateProvider { none, openai, google, microsoft }
 /// 翻译配置。一份即可：开机加载一次缓存内存，改动后写回磁盘。
 class TranslateConfig {
   TranslateProvider provider;
-  String apiUrl; // OpenAI 兼容端点；Google/Microsoft 端点（默认即可）
+  String apiUrl;
   String apiKey;
-  String model; // 仅 OpenAI 兼容方案需要
-  String targetLang; // 形如 zh-CN / zh-Hans / en
-  String systemPrompt; // 仅 OpenAI 兼容方案用到
+  String model;
+  String targetLang;
+  String systemPrompt;
+  int maxConcurrency;       // 并行翻译段数 (1-10，默认 5)
+  bool useGlossary;          // 是否启用「术语表 + 分批」两阶段翻译
+  int glossaryBatchSize;     // 术语表模式下每批合并多少段 (1-20，默认 8)
 
   TranslateConfig({
     required this.provider,
@@ -35,6 +38,9 @@ class TranslateConfig {
     required this.model,
     required this.targetLang,
     required this.systemPrompt,
+    required this.maxConcurrency,
+    required this.useGlossary,
+    required this.glossaryBatchSize,
   });
 
   factory TranslateConfig.defaults() {
@@ -47,6 +53,9 @@ class TranslateConfig {
       systemPrompt:
           '你是一名专业日文到中文的翻译。仅输出译文，不附加任何说明。'
           '务必原样保留文中所有形如「‹数字›」的占位符——不要改动、删除或翻译它们。',
+      maxConcurrency: 5,
+      useGlossary: false,
+      glossaryBatchSize: 8,
     );
   }
 
@@ -57,6 +66,9 @@ class TranslateConfig {
   static const _kModel = 'tr_model';
   static const _kTarget = 'tr_target_lang';
   static const _kSystem = 'tr_system_prompt';
+  static const _kConcur = 'tr_max_concur';
+  static const _kUseGloss = 'tr_use_gloss';
+  static const _kGlossBatch = 'tr_gloss_batch';
 
   Future<void> save() async {
     final p = await SharedPreferences.getInstance();
@@ -66,6 +78,9 @@ class TranslateConfig {
     await p.setString(_kModel, model);
     await p.setString(_kTarget, targetLang);
     await p.setString(_kSystem, systemPrompt);
+    await p.setInt(_kConcur, maxConcurrency);
+    await p.setBool(_kUseGloss, useGlossary);
+    await p.setInt(_kGlossBatch, glossaryBatchSize);
   }
 
   static Future<TranslateConfig> load() async {
@@ -80,6 +95,9 @@ class TranslateConfig {
       systemPrompt: p.getString(_kSystem) ??
           '你是一名专业日文到中文的翻译。仅输出译文，不附加任何说明。'
               '务必原样保留文中所有形如「‹数字›」的占位符——不要改动、删除或翻译它们。',
+      maxConcurrency: p.getInt(_kConcur) ?? 5,
+      useGlossary: p.getBool(_kUseGloss) ?? false,
+      glossaryBatchSize: p.getInt(_kGlossBatch) ?? 8,
     );
   }
 
@@ -129,6 +147,26 @@ class TranslateService {
       }
       return m[0]!;
     });
+  }
+
+  /// 从全文提取术语表（人名/地名/关键名词 → 中文翻译）。
+  /// 返回 JSON String 如 {"名前":"名字","東京":"东京"}，失败返回 null。
+  static Future<String?> extractGlossary(TranslateConfig cfg, String fullText) async {
+    if (cfg.provider != TranslateProvider.openai) return null;
+    final prompt = '请从以下日文小说全文提取所有专有名词（人名、地名、'
+        '组织名、关键术语），输出 JSON 对象，键为日文原文，值为中文翻译。'
+        '只输出 JSON，不要额外说明。\n\n$fullText';
+    try {
+      final result = await _translateOpenAI(cfg, prompt);
+      final start = result.indexOf('{');
+      final end = result.lastIndexOf('}');
+      if (start >= 0 && end > start) {
+        return result.substring(start, end + 1);
+      }
+      return null;
+    } catch (_) {
+      return null;
+    }
   }
 
   /// 翻译任意长文本：占位化 → 分块 → 逐块翻译 → 还原标记。

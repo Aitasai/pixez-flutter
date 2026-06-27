@@ -243,7 +243,52 @@ class _TranslateSettingPageState extends State<TranslateSettingPage> {
               label: '目标语言',
               hint: '默认 zh-CN',
             ),
-          ] else
+
+            _section('并行翻译数 (1-10)'),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Row(children: [
+                Expanded(
+                  child: Slider(
+                    value: cfg.maxConcurrency.toDouble(),
+                    min: 1, max: 10, divisions: 9,
+                    label: '${cfg.maxConcurrency}',
+                    onChanged: (v) => setState(() => cfg.maxConcurrency = v.round()),
+                  ),
+                ),
+                SizedBox(width: 8),
+                Text('${cfg.maxConcurrency}',
+                  style: Theme.of(context).textTheme.titleMedium),
+              ]),
+            ),
+
+            if (isAi) ...[
+              _section('术语表模式（减少人名/术语不一致）'),
+              SwitchListTile(
+                title: const Text('启用术语表'),
+                subtitle: const Text('先全文抽取术语，再分批注入翻译。节省约 50% 时间，'
+                    '额外 token 约 15-20%'),
+                value: cfg.useGlossary,
+                onChanged: (v) => setState(() => cfg.useGlossary = v),
+              ),
+              if (cfg.useGlossary)
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: Row(children: [
+                    Expanded(
+                      child: Slider(
+                        value: cfg.glossaryBatchSize.toDouble(),
+                        min: 2, max: 20, divisions: 18,
+                        label: '${cfg.glossaryBatchSize}',
+                        onChanged: (v) => setState(() => cfg.glossaryBatchSize = v.round()),
+                      ),
+                    ),
+                    SizedBox(width: 8),
+                    Text('每批 ${cfg.glossaryBatchSize} 段',
+                      style: Theme.of(context).textTheme.titleMedium),
+                  ]),
+                ),
+            ],
             Padding(
               padding: const EdgeInsets.all(24),
               child: Text(

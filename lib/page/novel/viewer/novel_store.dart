@@ -95,11 +95,10 @@ abstract class _NovelStoreBase with Store {
         .toList();
   }
 
-  /// 触发整篇小说翻译。
+  /// 触发整篇小说翻译。onProgress 每批完成后回调 → UI 刷新。
   /// 标题/简介即时翻译，正文按 \\n\\n 拆成自然段落，
-  /// 3 路并行翻译，每完成一段立即刷新 UI（runInAction），
-  /// 所有段完成后拼接 full body → 重建 translatedSpans。
-  Future<bool> doTranslate() async {
+  /// 并行翻译，每完成一段立即 runInAction 更新 UI。
+  Future<bool> doTranslate({void Function()? onProgress}) async {
     if (novelTextResponse == null || novel == null) return false;
     final cfg = await TranslateConfig.load();
     if (cfg.provider == TranslateProvider.none) {
@@ -123,6 +122,13 @@ abstract class _NovelStoreBase with Store {
       translatedCaption =
           cap.isEmpty ? '' : await TranslateService.translateLarge(cfg, cap);
 
+      // 1.5 术语表（可选，仅 AI 模式）
+      String? glossary;
+      if (cfg.useGlossary && cfg.provider == TranslateProvider.openai) {
+        glossary = await TranslateService.extractGlossary(
+            cfg, novelTextResponse!.text);
+      }
+
       // 2. 按 \\n\\n 拆自然段: List<(spanIdx, subText)>
       final allSpans = spans;
       final subParas = <(int, String)>[];
@@ -135,13 +141,15 @@ abstract class _NovelStoreBase with Store {
       }
       runInAction(() => totalNormalParagraphs = subParas.length);
 
-      // 3. 并行 3 路翻译子段
-      for (int i = 0; i < subParas.length; i += 3) {
-        final end = (i + 3).clamp(0, subParas.length);
+      // 3. 并行翻译（并发数从设置取，默认 5）
+      final concurrency = cfg.maxConcurrency.clamp(1, 10);
+      for (int i = 0; i < subParas.length; i += concurrency) {
+        final end = (i + concurrency).clamp(0, subParas.length);
         final batch = subParas.sublist(i, end);
         await Future.wait(
-          batch.map((s) => _translateSub(s.$1, s.$2, cfg)),
+          batch.map((s) => _translateSub(s.$1, s.$2, cfg, glossary)),
         );
+        onProgress?.call(); // ← 每批完成立刻触 UI 重建
       }
 
       // 4. 拼接 full body → 临时借原对象改 text → buildSpans → 还原
@@ -168,11 +176,15 @@ abstract class _NovelStoreBase with Store {
     }
   }
 
-  /// 翻译一个子段，完成后用 runInAction 立即更新 UI。
-  Future<void> _translateSub(int spanIdx, String subText, TranslateConfig cfg) async {
+  /// 翻译一个子段，术语表有则嵌入文本前缀。
+  Future<void> _translateSub(int spanIdx, String subText,
+      TranslateConfig cfg, String? glossary) async {
     runInAction(() => translatingParagraphIndex = spanIdx);
     try {
-      final translated = await TranslateService.translateLarge(cfg, subText);
+      final textToSend = glossary != null
+          ? '术语表（请保持一致）：$glossary\n\n$subText'
+          : subText;
+      final translated = await TranslateService.translateLarge(cfg, textToSend);
       runInAction(() {
         final prev = _paragraphTranslations[spanIdx] ?? '';
         _paragraphTranslations[spanIdx] =
