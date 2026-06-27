@@ -28,7 +28,8 @@ class TranslateConfig {
   String targetLang;
   String systemPrompt;
   int maxConcurrency;       // 并行翻译段数 (1-10，默认 5)
-  bool useGlossary;          // 是否启用「术语表 + 术语前缀」两阶段翻译
+  bool useGlossary;          // 是否启用术语表
+  int glossaryBatchSize;     // 每批合并多少自然段 (2-20，默认 5)
 
   TranslateConfig({
     required this.provider,
@@ -39,6 +40,7 @@ class TranslateConfig {
     required this.systemPrompt,
     required this.maxConcurrency,
     required this.useGlossary,
+    required this.glossaryBatchSize,
   });
 
   factory TranslateConfig.defaults() {
@@ -53,6 +55,7 @@ class TranslateConfig {
           '务必原样保留文中所有形如「‹数字›」的占位符——不要改动、删除或翻译它们。',
       maxConcurrency: 5,
       useGlossary: false,
+      glossaryBatchSize: 5,
     );
   }
 
@@ -65,6 +68,7 @@ class TranslateConfig {
   static const _kSystem = 'tr_system_prompt';
   static const _kConcur = 'tr_max_concur';
   static const _kUseGloss = 'tr_use_gloss';
+  static const _kGlossBatch = 'tr_gloss_batch';
 
   Future<void> save() async {
     final p = await SharedPreferences.getInstance();
@@ -76,6 +80,7 @@ class TranslateConfig {
     await p.setString(_kSystem, systemPrompt);
     await p.setInt(_kConcur, maxConcurrency);
     await p.setBool(_kUseGloss, useGlossary);
+    await p.setInt(_kGlossBatch, glossaryBatchSize);
   }
 
   static Future<TranslateConfig> load() async {
@@ -92,6 +97,7 @@ class TranslateConfig {
               '务必原样保留文中所有形如「‹数字›」的占位符——不要改动、删除或翻译它们。',
       maxConcurrency: p.getInt(_kConcur) ?? 5,
       useGlossary: p.getBool(_kUseGloss) ?? false,
+      glossaryBatchSize: p.getInt(_kGlossBatch) ?? 5,
     );
   }
 

@@ -270,6 +270,23 @@ class _TranslateSettingPageState extends State<TranslateSettingPage> {
                 value: cfg.useGlossary,
                 onChanged: (v) => setState(() => cfg.useGlossary = v),
               ),
+              if (cfg.useGlossary)
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: Row(children: [
+                    Expanded(
+                      child: Slider(
+                        value: cfg.glossaryBatchSize.toDouble(),
+                        min: 2, max: 20, divisions: 18,
+                        label: '${cfg.glossaryBatchSize}',
+                        onChanged: (v) => setState(() => cfg.glossaryBatchSize = v.round()),
+                      ),
+                    ),
+                    SizedBox(width: 8),
+                    Text('每批 ${cfg.glossaryBatchSize} 段',
+                      style: Theme.of(context).textTheme.titleMedium),
+                  ]),
+                ),
             ],
             Padding(
               padding: const EdgeInsets.all(24),

@@ -129,18 +129,24 @@ abstract class _NovelStoreBase with Store {
         }
       }
 
-      // 3. 按 \n\n 拆自然段
+      // 3. 按 \n\n 拆自然段，按 glossaryBatchSize 合并为批次
       final paras = _splitParagraphs(novelTextResponse!.text);
-      runInAction(() => totalNormalParagraphs = paras.length);
+      final batchSize = cfg.glossaryBatchSize.clamp(1, 20);
+      final batches = <(int, List<String>)>[];
+      for (int i = 0; i < paras.length; i += batchSize) {
+        final end = (i + batchSize).clamp(0, paras.length);
+        batches.add((i, paras.sublist(i, end)));
+      }
+      final totalBatches = batches.length;
+      runInAction(() => totalNormalParagraphs = totalBatches);
 
-      // 4. 逐段并行翻译
+      // 4. 并发翻译批次
       final concurrency = cfg.maxConcurrency.clamp(1, 10);
-      for (int i = 0; i < paras.length; i += concurrency) {
-        final end = (i + concurrency).clamp(0, paras.length);
-        final batch = <(int, String)>[];
-        for (int j = i; j < end; j++) batch.add((j, paras[j]));
+      for (int i = 0; i < batches.length; i += concurrency) {
+        final end = (i + concurrency).clamp(0, batches.length);
+        final group = batches.sublist(i, end);
         await Future.wait(
-          batch.map((s) => _translatePara(s.$1, s.$2, cfg)),
+          group.map((b) => _translateBatch(b.$1, b.$2, cfg)),
         );
         await _rebuildTranslatedSpans();
         onProgress?.call();
@@ -157,20 +163,36 @@ abstract class _NovelStoreBase with Store {
     }
   }
 
-  /// 翻译一个自然段。
-  Future<void> _translatePara(int idx, String text, TranslateConfig cfg) async {
-    runInAction(() => translatingParagraphIndex = idx);
+  /// 翻译一个批次（N 个自然段合并为一次 API 调用，[SEG N] 标记切分）。
+  Future<void> _translateBatch(int baseIdx, List<String> texts,
+      TranslateConfig cfg) async {
+    runInAction(() => translatingParagraphIndex = baseIdx);
     try {
-      final translated = await TranslateService.translateLarge(cfg, text);
+      final buf = StringBuffer();
+      for (int i = 0; i < texts.length; i++) {
+        if (i > 0) buf.write('\n\n');
+        buf.write('[SEG${baseIdx + i + 1}]\n${texts[i]}');
+      }
+      final combined = buf.toString();
+      final translated = await TranslateService.translateLarge(cfg, combined);
+      final parts = translated
+          .split(RegExp(r'\[SEG\d+\]'))
+          .map((s) => s.trim())
+          .where((s) => s.isNotEmpty)
+          .toList();
       runInAction(() {
-        _paragraphTranslations[idx] = translated;
-        translatedParagraphCount++;
+        for (int i = 0; i < texts.length && i < parts.length; i++) {
+          _paragraphTranslations[baseIdx + i] = parts[i];
+          translatedParagraphCount += texts.length;
+        }
         translatingParagraphIndex = -1;
       });
     } catch (e) {
       runInAction(() {
-        _paragraphErrors[idx] = e.toString();
-        translatedParagraphCount++;
+        for (int i = 0; i < texts.length; i++) {
+          _paragraphErrors[baseIdx + i] = e.toString();
+        }
+        translatedParagraphCount += texts.length;
         translatingParagraphIndex = -1;
       });
     }
