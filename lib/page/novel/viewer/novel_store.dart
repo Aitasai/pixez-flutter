@@ -107,13 +107,12 @@ abstract class _NovelStoreBase with Store {
             cfg, novelTextResponse!.text);
       }
 
-      // 3. 整篇正文一次翻译，按块报告进度（translateLarge 内部自动切块）
-      // 3. 整篇正文一次翻译，每块完成立即拼 partial translatedSpans
-      final textToSend = glossary != null
-          ? '术语表（请保持一致）：$glossary\n\n${novelTextResponse!.text}'
-          : novelTextResponse!.text;
+      // 3. 整篇正文一次翻译，术语表注入 system prompt（每块都能看到）
+      if (glossary != null) {
+        cfg.systemPrompt = '${cfg.systemPrompt}\n\n术语表（请保持一致）：$glossary';
+      }
       final translatedText = await TranslateService.translateLarge(
-        cfg, textToSend,
+        cfg, novelTextResponse!.text,
         onChunkProgress: (done, total, accumulated) {
           runInAction(() {
             translatedParagraphCount = done;
