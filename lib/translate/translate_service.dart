@@ -168,6 +168,7 @@ class TranslateService {
     TranslateConfig cfg,
     String text, {
     int maxChunk = 1800,
+    void Function(int done, int total)? onChunkProgress,
   }) async {
     if (text.trim().isEmpty) return text;
 
@@ -190,12 +191,16 @@ class TranslateService {
     if (cur.isNotEmpty) chunks.add(cur);
 
     final out = <String>[];
+    final totalNonEmpty = chunks.where((c) => c.trim().isNotEmpty).length;
+    var done = 0;
     for (final c in chunks) {
       if (c.trim().isEmpty) {
         out.add(c);
         continue;
       }
       out.add(await _translateSingle(cfg, c));
+      done++;
+      onChunkProgress?.call(done, totalNonEmpty);
     }
     return _restoreMarkers(out.join('\n'), markers);
   }

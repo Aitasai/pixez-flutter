@@ -65,39 +65,15 @@ abstract class _NovelStoreBase with Store {
   @observable
   String? translateError;
 
-  /// 已完成翻译的段数（type == 'normal'）
+  /// 已完成翻译的块数（translateLarge 内部 chunk）
   @observable
   int translatedParagraphCount = 0;
 
-  /// 可翻译段落总数
+  /// 总块数
   @observable
   int totalNormalParagraphs = 0;
 
-  /// 当前正在翻译的段索引（-1 表示空闲）
-  @observable
-  int translatingParagraphIndex = -1;
-
-  final Map<int, String> _paragraphTranslations = {};
-  final Map<int, String> _paragraphErrors = {};
-
-  /// 给定段索引是否有译文
-  String? translatedTextForIdx(int idx) => _paragraphTranslations[idx];
-
-  /// 给定段索引的错误
-  String? errorForIdx(int idx) => _paragraphErrors[idx];
-
-  /// 按双换行 \\n\\n 拆分文本成子段（一万字小说也不该只有 5 段）。
-  static List<String> _splitSpanText(String text) {
-    return text
-        .split(RegExp(r'\n{2,}'))
-        .map((s) => s.trim())
-        .where((s) => s.isNotEmpty)
-        .toList();
-  }
-
-  /// 触发整篇小说翻译。onProgress 每批完成后回调 → UI 刷新。
-  /// 标题/简介即时翻译，正文按 \\n\\n 拆成自然段落，
-  /// 并行翻译，每完成一段立即 runInAction 更新 UI。
+  /// 触发整篇小说翻译。onProgress 每块完成回调 → UI 刷新。
   Future<bool> doTranslate({void Function()? onProgress}) async {
     if (novelTextResponse == null || novel == null) return false;
     final cfg = await TranslateConfig.load();
@@ -108,8 +84,6 @@ abstract class _NovelStoreBase with Store {
     runInAction(() {
       translating = true;
       translateError = null;
-      _paragraphTranslations.clear();
-      _paragraphErrors.clear();
       translatedParagraphCount = 0;
       translatedSpans = [];
       totalNormalParagraphs = 0;
@@ -122,44 +96,31 @@ abstract class _NovelStoreBase with Store {
       translatedCaption =
           cap.isEmpty ? '' : await TranslateService.translateLarge(cfg, cap);
 
-      // 1.5 术语表（可选，仅 AI 模式）
+      // 2. 术语表（可选，仅 AI 模式）
       String? glossary;
       if (cfg.useGlossary && cfg.provider == TranslateProvider.openai) {
         glossary = await TranslateService.extractGlossary(
             cfg, novelTextResponse!.text);
       }
 
-      // 2. 按 \\n\\n 拆自然段: List<(spanIdx, subText)>
-      final allSpans = spans;
-      final subParas = <(int, String)>[];
-      for (int i = 0; i < allSpans.length; i++) {
-        if (allSpans[i].type == NovelSpansType.normal) {
-          for (final p in _splitSpanText(allSpans[i].text)) {
-            subParas.add((i, p));
-          }
-        }
-      }
-      runInAction(() => totalNormalParagraphs = subParas.length);
+      // 3. 整篇正文一次翻译，按块报告进度（translateLarge 内部自动切块）
+      final textToSend = glossary != null
+          ? '术语表（请保持一致）：$glossary\n\n${novelTextResponse!.text}'
+          : novelTextResponse!.text;
+      final translatedText = await TranslateService.translateLarge(
+        cfg, textToSend,
+        onChunkProgress: (done, total) {
+          runInAction(() {
+            translatedParagraphCount = done;
+            totalNormalParagraphs = total;
+          });
+          onProgress?.call();
+        },
+      );
 
-      // 3. 并行翻译（并发数从设置取，默认 5）
-      final concurrency = cfg.maxConcurrency.clamp(1, 10);
-      for (int i = 0; i < subParas.length; i += concurrency) {
-        final end = (i + concurrency).clamp(0, subParas.length);
-        final batch = subParas.sublist(i, end);
-        await Future.wait(
-          batch.map((s) => _translateSub(s.$1, s.$2, cfg, glossary)),
-        );
-        onProgress?.call();
-        await Future.delayed(const Duration(milliseconds: 50));
-      }
-
-      // 4. 拼接 full body → 临时借原对象改 text → buildSpans → 还原
-      final buf = StringBuffer();
-      for (int i = 0; i < allSpans.length; i++) {
-        buf.write(_paragraphTranslations[i] ?? allSpans[i].text);
-      }
+      // 4. 临时借原对象改 text → buildSpans → 还原
       final origText = novelTextResponse!.text;
-      novelTextResponse!.text = buf.toString();
+      novelTextResponse!.text = translatedText;
       try {
         translatedSpans =
             await compute(buildSpans, novelTextResponse!);
@@ -167,7 +128,7 @@ abstract class _NovelStoreBase with Store {
         novelTextResponse!.text = origText;
       }
       runInAction(() => translating = false);
-      return translatedParagraphCount > 0;
+      return true;
     } catch (e) {
       runInAction(() {
         translateError = e.toString();
@@ -176,31 +137,6 @@ abstract class _NovelStoreBase with Store {
       return false;
     }
   }
-
-  /// 翻译一个子段，术语表有则嵌入文本前缀。
-  Future<void> _translateSub(int spanIdx, String subText,
-      TranslateConfig cfg, String? glossary) async {
-    runInAction(() => translatingParagraphIndex = spanIdx);
-    try {
-      final textToSend = glossary != null
-          ? '术语表（请保持一致）：$glossary\n\n$subText'
-          : subText;
-      final translated = await TranslateService.translateLarge(cfg, textToSend);
-      runInAction(() {
-        final prev = _paragraphTranslations[spanIdx] ?? '';
-        _paragraphTranslations[spanIdx] =
-            prev.isEmpty ? translated : '$prev\n\n$translated';
-        translatedParagraphCount++;
-        translatingParagraphIndex = -1;
-      });
-    } catch (e) {
-      runInAction(() {
-        _paragraphErrors[spanIdx] =
-            (_paragraphErrors[spanIdx] ?? '') + '${e.toString()}\n';
-        translatedParagraphCount++;
-        translatingParagraphIndex = -1;
-      });
-    }
   }
   // [PIXEZ-TRANSLATE-PATCH] ADD END
 

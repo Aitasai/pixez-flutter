@@ -280,87 +280,25 @@ class _NovelViewerPageState extends State<NovelViewerPage> {
     int index,
     List<NovelSpansData> spanDatas,
   ) {
-    final spanData = spanDatas[index];
-    final bool isNormal = spanData.type == NovelSpansType.normal;
-    // 翻译状态（仅 normal 段落才有意义）
-    final bool isTranslating =
-        isNormal && _novelStore.translatingParagraphIndex == index;
-    final String? err =
-        isNormal ? _novelStore.errorForIdx(index) : null;
-    final bool hasTrans =
-        isNormal && _novelStore.translatedTextForIdx(index) != null;
-
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16.0),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // —— 原文 / 译文行 ——
-          SelectionArea(
-            onSelectionChanged: (value) {
-              _selectedText = value?.plainText ?? "";
-            },
-            contextMenuBuilder: (context, editableTextState) {
-              return _buildSelectionMenu(editableTextState, context);
-            },
-            child: Text.rich(
-              novelSpansGenerator.novelSpansDatatoInlineSpan(
-                context,
-                spanData,
-              ),
-              style: _textStyle,
-              textHeightBehavior: const TextHeightBehavior(
-                applyHeightToLastDescent: true,
-              ),
-            ),
+      child: SelectionArea(
+        onSelectionChanged: (value) {
+          _selectedText = value?.plainText ?? "";
+        },
+        contextMenuBuilder: (context, editableTextState) {
+          return _buildSelectionMenu(editableTextState, context);
+        },
+        child: Text.rich(
+          novelSpansGenerator.novelSpansDatatoInlineSpan(
+            context,
+            spanDatas[index],
           ),
-          // —— 逐段翻译进度 / 错误 / 完成标记 ——
-          if (!showTranslation) ...[
-            if (isTranslating)
-              Padding(
-                padding: const EdgeInsets.only(top: 4),
-                child: Row(children: [
-                  SizedBox(
-                    width: 12, height: 12,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      color: Theme.of(context).colorScheme.primary,
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Text('翻译中…',
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: Theme.of(context).colorScheme.outline,
-                    ),
-                  ),
-                ]),
-              ),
-            if (err != null)
-              Padding(
-                padding: const EdgeInsets.only(top: 4),
-                child: Row(children: [
-                  Icon(Icons.error_outline, size: 14,
-                    color: Theme.of(context).colorScheme.error),
-                  const SizedBox(width: 4),
-                  Expanded(
-                    child: Text(err,
-                      style: TextStyle(
-                        fontSize: 11,
-                        color: Theme.of(context).colorScheme.error,
-                      ),
-                    ),
-                  ),
-                ]),
-              ),
-            if (hasTrans && !isTranslating && err == null)
-              Padding(
-                padding: const EdgeInsets.only(top: 2),
-                child: Icon(Icons.check_circle_outline, size: 14,
-                  color: Theme.of(context).colorScheme.primary.withAlpha(140)),
-              ),
-          ],
-        ],
+          style: _textStyle,
+          textHeightBehavior: const TextHeightBehavior(
+            applyHeightToLastDescent: true,
+          ),
+        ),
       ),
     );
   }
