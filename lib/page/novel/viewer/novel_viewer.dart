@@ -185,9 +185,12 @@ class _NovelViewerPageState extends State<NovelViewerPage> {
   }
 
   Widget _buildBody(BuildContext context) {
-    // [PIXEZ-TRANSLATE-PATCH] 译文/原文 spans 切换
+    // [PIXEZ-TRANSLATE-PATCH] 翻译中自动显示 partial 译文，翻译完走 toggle
+    final bool showTrans = _novelStore.translating
+        ? _novelStore.translatedSpans.isNotEmpty
+        : showTranslation;
     final bodySpans =
-        showTranslation && _novelStore.translatedSpans.isNotEmpty
+        showTrans && _novelStore.translatedSpans.isNotEmpty
             ? _novelStore.translatedSpans
             : _novelStore.spans;
     return ListView.builder(
@@ -323,10 +326,10 @@ class _NovelViewerPageState extends State<NovelViewerPage> {
   }
 
   Widget _buildHeader(BuildContext context) {
-    // [PIXEZ-TRANSLATE-PATCH] 译过的标题/简介直接取译文
-    final bool titleTrans = showTranslation &&
+    // [PIXEZ-TRANSLATE-PATCH] 翻译中或 toggle 时显示译文标题/简介
+    final bool titleTrans = (showTranslation || _novelStore.translating) &&
         (_novelStore.translatedTitle?.isNotEmpty ?? false);
-    final bool capTrans = showTranslation &&
+    final bool capTrans = (showTranslation || _novelStore.translating) &&
         (_novelStore.translatedCaption?.isNotEmpty ?? false);
     final String titleText =
         titleTrans ? _novelStore.translatedTitle! : "${_novelStore.novel!.title}";

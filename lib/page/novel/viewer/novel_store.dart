@@ -65,6 +65,10 @@ abstract class _NovelStoreBase with Store {
   @observable
   String? translateError;
 
+  /// 逐块累积的 partial 译文正文（每块完成立即更新，不等全部完成）
+  @observable
+  String? partialTranslatedBody;
+
   /// 已完成翻译的块数（translateLarge 内部 chunk）
   @observable
   int translatedParagraphCount = 0;
@@ -104,16 +108,20 @@ abstract class _NovelStoreBase with Store {
       }
 
       // 3. 整篇正文一次翻译，按块报告进度（translateLarge 内部自动切块）
+      // 3. 整篇正文一次翻译，每块完成立即拼 partial translatedSpans
       final textToSend = glossary != null
           ? '术语表（请保持一致）：$glossary\n\n${novelTextResponse!.text}'
           : novelTextResponse!.text;
       final translatedText = await TranslateService.translateLarge(
         cfg, textToSend,
-        onChunkProgress: (done, total) {
+        onChunkProgress: (done, total, accumulated) {
           runInAction(() {
             translatedParagraphCount = done;
             totalNormalParagraphs = total;
+            partialTranslatedBody = accumulated;
           });
+          // 异步构建 partial translatedSpans（不阻塞块间进度）
+          _buildPartialSpans(accumulated);
           onProgress?.call();
         },
       );
@@ -137,6 +145,22 @@ abstract class _NovelStoreBase with Store {
       return false;
     }
   }
+  }
+
+  /// 每块翻完异步构建 partial translatedSpans（不等全部完成即可看到译文）。
+  Future<void> _buildPartialSpans(String partialText) async {
+    try {
+      final origText = novelTextResponse!.text;
+      novelTextResponse!.text = partialText;
+      try {
+        translatedSpans =
+            await compute(buildSpans, novelTextResponse!);
+      } finally {
+        novelTextResponse!.text = origText;
+      }
+    } catch (_) {
+      // partial 构建失败无所谓，下一块会覆盖
+    }
   }
   // [PIXEZ-TRANSLATE-PATCH] ADD END
 

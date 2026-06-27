@@ -168,7 +168,7 @@ class TranslateService {
     TranslateConfig cfg,
     String text, {
     int maxChunk = 1800,
-    void Function(int done, int total)? onChunkProgress,
+    void Function(int done, int total, String accumulatedText)? onChunkProgress,
   }) async {
     if (text.trim().isEmpty) return text;
 
@@ -200,7 +200,8 @@ class TranslateService {
       }
       out.add(await _translateSingle(cfg, c));
       done++;
-      onChunkProgress?.call(done, totalNonEmpty);
+      final partial = _restoreMarkers(out.join('\n'), markers);
+      onChunkProgress?.call(done, totalNonEmpty, partial);
     }
     return _restoreMarkers(out.join('\n'), markers);
   }
