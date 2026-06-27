@@ -53,7 +53,8 @@ abstract class _NovelStoreBase with Store {
   @observable
   List<NovelSpansData> spans = [];
 
-  // [PIXEZ-TRANSLATE-PATCH] ADD BEGIN —— 翻译状态（逐段翻译）
+
+  // [PIXEZ-TRANSLATE-PATCH] ADD BEGIN —— 翻译状态（逐自然段翻译）
   @observable
   bool translating = false;
   @observable
@@ -65,19 +66,34 @@ abstract class _NovelStoreBase with Store {
   @observable
   String? translateError;
 
-  /// 逐块累积的 partial 译文正文（每块完成立即更新，不等全部完成）
-  @observable
-  String? partialTranslatedBody;
-
-  /// 已完成翻译的块数（translateLarge 内部 chunk）
+  /// 已完成翻译的自然段数
   @observable
   int translatedParagraphCount = 0;
 
-  /// 总块数
+  /// 自然段总数
   @observable
   int totalNormalParagraphs = 0;
 
-  /// 触发整篇小说翻译。onProgress 每块完成回调 → UI 刷新。
+  /// 当前正在翻译的段索引（-1 = 空闲）
+  @observable
+  int translatingParagraphIndex = -1;
+
+  final Map<int, String> _paragraphTranslations = {};
+  final Map<int, String> _paragraphErrors = {};
+
+  String? translatedTextForIdx(int idx) => _paragraphTranslations[idx];
+  String? errorForIdx(int idx) => _paragraphErrors[idx];
+
+  /// 按双换行 \n\n 拆自然段
+  static List<String> _splitParagraphs(String text) {
+    return text
+        .split(RegExp(r'\n{2,}'))
+        .map((s) => s.trim())
+        .where((s) => s.isNotEmpty)
+        .toList();
+  }
+
+  /// 触发翻译：标题/简介 → 术语表 → 逐段并行翻译正文。
   Future<bool> doTranslate({void Function()? onProgress}) async {
     if (novelTextResponse == null || novel == null) return false;
     final cfg = await TranslateConfig.load();
@@ -88,6 +104,8 @@ abstract class _NovelStoreBase with Store {
     runInAction(() {
       translating = true;
       translateError = null;
+      _paragraphTranslations.clear();
+      _paragraphErrors.clear();
       translatedParagraphCount = 0;
       translatedSpans = [];
       totalNormalParagraphs = 0;
@@ -100,42 +118,36 @@ abstract class _NovelStoreBase with Store {
       translatedCaption =
           cap.isEmpty ? '' : await TranslateService.translateLarge(cfg, cap);
 
-      // 2. 术语表（可选，仅 AI 模式）
+      // 2. 术语表 → 注入 system prompt（每段请求都看到）
       String? glossary;
       if (cfg.useGlossary && cfg.provider == TranslateProvider.openai) {
         glossary = await TranslateService.extractGlossary(
             cfg, novelTextResponse!.text);
+        if (glossary != null) {
+          cfg.systemPrompt =
+              '${cfg.systemPrompt}\n\n术语表（请保持一致）：$glossary';
+        }
       }
 
-      // 3. 整篇正文一次翻译，术语表注入 system prompt（每块都能看到）
-      if (glossary != null) {
-        cfg.systemPrompt = '${cfg.systemPrompt}\n\n术语表（请保持一致）：$glossary';
-      }
-      final translatedText = await TranslateService.translateLarge(
-        cfg, novelTextResponse!.text,
-        onChunkProgress: (done, total, accumulated) {
-          runInAction(() {
-            translatedParagraphCount = done;
-            totalNormalParagraphs = total;
-            partialTranslatedBody = accumulated;
-          });
-          // 异步构建 partial translatedSpans（不阻塞块间进度）
-          _buildPartialSpans(accumulated);
-          onProgress?.call();
-        },
-      );
+      // 3. 按 \n\n 拆自然段
+      final paras = _splitParagraphs(novelTextResponse!.text);
+      runInAction(() => totalNormalParagraphs = paras.length);
 
-      // 4. 临时借原对象改 text → buildSpans → 还原
-      final origText = novelTextResponse!.text;
-      novelTextResponse!.text = translatedText;
-      try {
-        translatedSpans =
-            await compute(buildSpans, novelTextResponse!);
-      } finally {
-        novelTextResponse!.text = origText;
+      // 4. 逐段并行翻译
+      final concurrency = cfg.maxConcurrency.clamp(1, 10);
+      for (int i = 0; i < paras.length; i += concurrency) {
+        final end = (i + concurrency).clamp(0, paras.length);
+        final batch = <(int, String)>[];
+        for (int j = i; j < end; j++) batch.add((j, paras[j]));
+        await Future.wait(
+          batch.map((s) => _translatePara(s.$1, s.$2, cfg)),
+        );
+        await _rebuildTranslatedSpans();
+        onProgress?.call();
+        await Future.delayed(const Duration(milliseconds: 30));
       }
       runInAction(() => translating = false);
-      return true;
+      return translatedParagraphCount > 0;
     } catch (e) {
       runInAction(() {
         translateError = e.toString();
@@ -145,11 +157,36 @@ abstract class _NovelStoreBase with Store {
     }
   }
 
-  /// 每块翻完异步构建 partial translatedSpans（不等全部完成即可看到译文）。
-  Future<void> _buildPartialSpans(String partialText) async {
+  /// 翻译一个自然段。
+  Future<void> _translatePara(int idx, String text, TranslateConfig cfg) async {
+    runInAction(() => translatingParagraphIndex = idx);
     try {
+      final translated = await TranslateService.translateLarge(cfg, text);
+      runInAction(() {
+        _paragraphTranslations[idx] = translated;
+        translatedParagraphCount++;
+        translatingParagraphIndex = -1;
+      });
+    } catch (e) {
+      runInAction(() {
+        _paragraphErrors[idx] = e.toString();
+        translatedParagraphCount++;
+        translatingParagraphIndex = -1;
+      });
+    }
+  }
+
+  /// 用当前已有段落译文重建 translatedSpans（不等全部完成）。
+  Future<void> _rebuildTranslatedSpans() async {
+    try {
+      final buf = StringBuffer();
+      final splits = _splitParagraphs(novelTextResponse!.text);
+      for (int i = 0; i < splits.length; i++) {
+        if (i > 0) buf.write('\n\n');
+        buf.write(_paragraphTranslations[i] ?? splits[i]);
+      }
       final origText = novelTextResponse!.text;
-      novelTextResponse!.text = partialText;
+      novelTextResponse!.text = buf.toString();
       try {
         translatedSpans =
             await compute(buildSpans, novelTextResponse!);
@@ -157,7 +194,7 @@ abstract class _NovelStoreBase with Store {
         novelTextResponse!.text = origText;
       }
     } catch (_) {
-      // partial 构建失败无所谓，下一块会覆盖
+      // partial rebuild 失败无所谓，下轮覆盖
     }
   }
   // [PIXEZ-TRANSLATE-PATCH] ADD END

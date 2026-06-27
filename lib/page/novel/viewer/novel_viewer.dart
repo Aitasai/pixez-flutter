@@ -283,25 +283,68 @@ class _NovelViewerPageState extends State<NovelViewerPage> {
     int index,
     List<NovelSpansData> spanDatas,
   ) {
+    final spanData = spanDatas[index];
+    final bool isNormal = spanData.type == NovelSpansType.normal;
+    final bool isTranslating =
+        isNormal && _novelStore.translatingParagraphIndex == index;
+    final String? err =
+        isNormal ? _novelStore.errorForIdx(index) : null;
+    final bool hasTrans =
+        isNormal && _novelStore.translatedTextForIdx(index) != null;
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16.0),
-      child: SelectionArea(
-        onSelectionChanged: (value) {
-          _selectedText = value?.plainText ?? "";
-        },
-        contextMenuBuilder: (context, editableTextState) {
-          return _buildSelectionMenu(editableTextState, context);
-        },
-        child: Text.rich(
-          novelSpansGenerator.novelSpansDatatoInlineSpan(
-            context,
-            spanDatas[index],
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SelectionArea(
+            onSelectionChanged: (value) {
+              _selectedText = value?.plainText ?? "";
+            },
+            contextMenuBuilder: (context, editableTextState) {
+              return _buildSelectionMenu(editableTextState, context);
+            },
+            child: Text.rich(
+              novelSpansGenerator.novelSpansDatatoInlineSpan(
+                context, spanData,
+              ),
+              style: _textStyle,
+              textHeightBehavior: const TextHeightBehavior(
+                applyHeightToLastDescent: true,
+              ),
+            ),
           ),
-          style: _textStyle,
-          textHeightBehavior: const TextHeightBehavior(
-            applyHeightToLastDescent: true,
-          ),
-        ),
+          if (!showTranslation) ...[
+            if (isTranslating)
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Row(children: [
+                  SizedBox(width: 12, height: 12,
+                    child: CircularProgressIndicator(strokeWidth: 2,
+                      color: Theme.of(context).colorScheme.primary)),
+                  const SizedBox(width: 8),
+                  Text('翻译中…', style: TextStyle(fontSize: 12,
+                    color: Theme.of(context).colorScheme.outline)),
+                ]),
+              ),
+            if (err != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Row(children: [
+                  Icon(Icons.error_outline, size: 14,
+                    color: Theme.of(context).colorScheme.error),
+                  const SizedBox(width: 4),
+                  Expanded(child: Text(err, style: TextStyle(fontSize: 11,
+                    color: Theme.of(context).colorScheme.error))),
+                ]),
+              ),
+            if (hasTrans && !isTranslating && err == null)
+              Padding(
+                padding: const EdgeInsets.only(top: 2),
+                child: Icon(Icons.check_circle_outline, size: 14,
+                  color: Theme.of(context).colorScheme.primary.withAlpha(140)),
+              ),
+          ],
+        ],
       ),
     );
   }
