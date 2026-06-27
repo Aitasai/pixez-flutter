@@ -142,27 +142,15 @@ abstract class _NovelStoreBase with Store {
       runInAction(() => totalNormalParagraphs = subParas.length);
 
       // 3. 并行翻译（并发数从设置取，默认 5）
-      if (glossary != null) {
-        // 术语表模式：批处理减少 token 浪费
-        final batchSize = cfg.glossaryBatchSize.clamp(2, 20);
-        for (int i = 0; i < subParas.length; i += batchSize) {
-          final end = (i + batchSize).clamp(0, subParas.length);
-          final batch = subParas.sublist(i, end);
-          await _translateBatch(batch, cfg, glossary);
-          onProgress?.call();
-          await Future.delayed(const Duration(milliseconds: 50));
-        }
-      } else {
-        final concurrency = cfg.maxConcurrency.clamp(1, 10);
-        for (int i = 0; i < subParas.length; i += concurrency) {
-          final end = (i + concurrency).clamp(0, subParas.length);
-          final batch = subParas.sublist(i, end);
-          await Future.wait(
-            batch.map((s) => _translateSub(s.$1, s.$2, cfg, null)),
-          );
-          onProgress?.call();
-          await Future.delayed(const Duration(milliseconds: 50));
-        }
+      final concurrency = cfg.maxConcurrency.clamp(1, 10);
+      for (int i = 0; i < subParas.length; i += concurrency) {
+        final end = (i + concurrency).clamp(0, subParas.length);
+        final batch = subParas.sublist(i, end);
+        await Future.wait(
+          batch.map((s) => _translateSub(s.$1, s.$2, cfg, glossary)),
+        );
+        onProgress?.call();
+        await Future.delayed(const Duration(milliseconds: 50));
       }
 
       // 4. 拼接 full body → 临时借原对象改 text → buildSpans → 还原
@@ -210,45 +198,6 @@ abstract class _NovelStoreBase with Store {
         _paragraphErrors[spanIdx] =
             (_paragraphErrors[spanIdx] ?? '') + '${e.toString()}\n';
         translatedParagraphCount++;
-        translatingParagraphIndex = -1;
-      });
-    }
-  }
-
-  /// 术语表模式：合并 N 段一次翻译，再用 [SEG N] 标记切回各段。
-  Future<void> _translateBatch(List<(int, String)> batch,
-      TranslateConfig cfg, String glossary) async {
-    final segs = <String>[];
-    for (int i = 0; i < batch.length; i++) {
-      segs.add('[SEG${i + 1}]\n${batch[i].$2}');
-    }
-    final combined = segs.join('\n\n');
-    runInAction(() => translatingParagraphIndex = batch.first.$1);
-    try {
-      final textToSend = '术语表（请保持一致）：$glossary\n\n$combined';
-      final translated = await TranslateService.translateLarge(cfg, textToSend);
-      final parts = translated
-          .split(RegExp(r'\[SEG\d+\]'))
-          .map((s) => s.trim())
-          .where((s) => s.isNotEmpty)
-          .toList();
-      runInAction(() {
-        for (int i = 0; i < batch.length && i < parts.length; i++) {
-          final spanIdx = batch[i].$1;
-          final prev = _paragraphTranslations[spanIdx] ?? '';
-          _paragraphTranslations[spanIdx] =
-              prev.isEmpty ? parts[i] : '$prev\n\n${parts[i]}';
-          translatedParagraphCount++;
-        }
-        translatingParagraphIndex = -1;
-      });
-    } catch (e) {
-      runInAction(() {
-        for (final s in batch) {
-          _paragraphErrors[s.$1] =
-              (_paragraphErrors[s.$1] ?? '') + '${e.toString()}\n';
-          translatedParagraphCount++;
-        }
         translatingParagraphIndex = -1;
       });
     }

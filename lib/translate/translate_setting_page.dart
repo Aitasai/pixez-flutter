@@ -266,28 +266,10 @@ class _TranslateSettingPageState extends State<TranslateSettingPage> {
               _section('术语表模式（减少人名/术语不一致）'),
               SwitchListTile(
                 title: const Text('启用术语表'),
-                subtitle: const Text('先全文抽取术语，再分批注入翻译。节省约 50% 时间，'
-                    '额外 token 约 15-20%'),
+                subtitle: const Text('先全文抽取术语表，每段翻译时注入前缀以保持一致。'),
                 value: cfg.useGlossary,
                 onChanged: (v) => setState(() => cfg.useGlossary = v),
               ),
-              if (cfg.useGlossary)
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
-                  child: Row(children: [
-                    Expanded(
-                      child: Slider(
-                        value: cfg.glossaryBatchSize.toDouble(),
-                        min: 2, max: 20, divisions: 18,
-                        label: '${cfg.glossaryBatchSize}',
-                        onChanged: (v) => setState(() => cfg.glossaryBatchSize = v.round()),
-                      ),
-                    ),
-                    SizedBox(width: 8),
-                    Text('每批 ${cfg.glossaryBatchSize} 段',
-                      style: Theme.of(context).textTheme.titleMedium),
-                  ]),
-                ),
             ],
             Padding(
               padding: const EdgeInsets.all(24),
