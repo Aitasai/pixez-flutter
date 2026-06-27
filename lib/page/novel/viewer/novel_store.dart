@@ -145,7 +145,6 @@ abstract class _NovelStoreBase with Store {
       return false;
     }
   }
-  }
 
   /// 每块翻完异步构建 partial translatedSpans（不等全部完成即可看到译文）。
   Future<void> _buildPartialSpans(String partialText) async {
