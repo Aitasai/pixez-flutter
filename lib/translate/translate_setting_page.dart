@@ -300,6 +300,8 @@ class _TranslateSettingPageState extends State<TranslateSettingPage> {
               ),
             ),
 
+          ],
+
           const SizedBox(height: 24),
           if (cfg.provider != TranslateProvider.none) ...[
             Padding(
